@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { createTask, getTask, listTasks, updateTaskStatus, getLogs } from "./lib/db.js";
 import { createSession } from "./lib/coordinator.js";
 import { startTask, stopTask, isRunning } from "./lib/runner.js";
-import { getManagedProjects } from "./lib/context.js";
+import { discoverProjects } from "./lib/context.js";
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -199,7 +199,7 @@ app.post("/api/chat/send", async (req, res) => {
 // --- API: Projects ---
 
 app.get("/api/projects", (_req, res) => {
-  res.json(getManagedProjects());
+  res.json(discoverProjects());
 });
 
 // --- Start ---
