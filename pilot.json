@@ -1,0 +1,16 @@
+{
+  "projects": [
+    {
+      "name": "math-question-bank",
+      "path": "/home/ubuntu/math-question-bank",
+      "harness": {
+        "typecheck": true,
+        "lint": true,
+        "test": "vitest",
+        "e2e": "playwright",
+        "build": true
+      },
+      "status": "pending-setup"
+    }
+  ]
+}
