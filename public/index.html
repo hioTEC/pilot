@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pilot</title>
+<style>
+:root {
+  --bg: #0f172a; --surface: #1e293b; --surface2: #273449;
+  --border: #334155; --text: #e2e8f0; --muted: #94a3b8;
+  --accent: #6366f1; --accent-hover: #4f46e5;
+  --green: #22c55e; --red: #ef4444; --amber: #f59e0b; --blue: #3b82f6;
+  --radius: 10px; --font: system-ui, -apple-system, sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+/* Layout */
+.app { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 56px 1fr; height: 100vh; }
+header { grid-column: 1/-1; display: flex; align-items: center; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--border); gap: 16px; }
+header h1 { font-size: 18px; font-weight: 700; }
+header .spacer { flex: 1; }
+header a { color: var(--muted); text-decoration: none; font-size: 13px; }
+header a:hover { color: var(--text); }
+
+.sidebar { background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; display: flex; flex-direction: column; }
+.main { overflow-y: auto; display: flex; flex-direction: column; }
+
+/* Sidebar: Task list */
+.sidebar-header { padding: 16px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); }
+.sidebar-header h2 { font-size: 14px; flex: 1; }
+.btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn-accent { background: var(--accent); color: #fff; }
+.btn-accent:hover { background: var(--accent-hover); }
+.btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.btn-ghost:hover { background: var(--surface2); color: var(--text); }
+.btn-green { background: var(--green); color: #fff; }
+.btn-red { background: var(--red); color: #fff; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+
+.task-list { flex: 1; overflow-y: auto; }
+.task-item { padding: 12px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background .15s; }
+.task-item:hover { background: var(--surface2); }
+.task-item.active { background: var(--surface2); border-left: 3px solid var(--accent); }
+.task-item .title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.task-item .meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+.badge-todo { background: #334155; color: #94a3b8; }
+.badge-running { background: #1e3a5f; color: var(--blue); }
+.badge-passed { background: #14532d; color: var(--green); }
+.badge-failed { background: #451a1a; color: var(--red); }
+.badge-done { background: #1a2e1a; color: var(--green); }
+
+/* Main content */
+.panel { padding: 20px; flex: 1; display: flex; flex-direction: column; gap: 16px; }
+.empty-state { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; }
+
+/* Task detail */
+.task-detail-header { display: flex; align-items: flex-start; gap: 12px; }
+.task-detail-header .title { font-size: 18px; font-weight: 700; flex: 1; }
+.task-detail-header .actions { display: flex; gap: 8px; }
+
+.spec-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; white-space: pre-wrap; font-size: 13px; line-height: 1.6; max-height: 200px; overflow-y: auto; }
+.pr-link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 500; }
+.pr-link:hover { background: var(--surface2); }
+
+/* Log viewer */
+.log-viewer { background: #0a0e17; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.7; flex: 1; min-height: 200px; max-height: 50vh; overflow-y: auto; }
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-line.stdout { color: #d1d5db; }
+.log-line.stderr { color: var(--red); }
+.log-line.system { color: var(--amber); font-style: italic; }
+
+/* Coordinator chat */
+.chat-container { display: flex; flex-direction: column; height: 100%; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.chat-msg { max-width: 85%; padding: 10px 14px; border-radius: var(--radius); font-size: 13px; line-height: 1.6; }
+.chat-msg.user { align-self: flex-end; background: var(--accent); color: #fff; white-space: pre-wrap; }
+.chat-msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
+.task-spec-block { background: var(--surface2); border: 1px solid var(--accent); border-radius: 6px; padding: 10px; margin-top: 8px; }
+
+.chat-input-bar { display: flex; gap: 8px; padding: 16px; border-top: 1px solid var(--border); background: var(--surface); }
+.chat-input-bar input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; }
+.chat-input-bar input:focus { outline: none; border-color: var(--accent); }
+
+/* Tabs */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding: 0 20px; background: var(--surface); }
+.tab { padding: 10px 16px; cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 500; border-bottom: 2px solid transparent; transition: all .15s; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; }
+
+@media (max-width: 768px) {
+  .app { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .sidebar.show { display: flex; position: fixed; inset: 56px 0 0 0; z-index: 10; width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Pilot</h1>
+    <span class="spacer"></span>
+    <a href="/logout">Logout</a>
+  </header>
+
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h2>Tasks</h2>
+      <button class="btn btn-accent btn-sm" onclick="showNewTask()">+ New</button>
+    </div>
+    <div class="task-list" id="taskList"></div>
+  </div>
+
+  <div class="main" id="main">
+    <div class="empty-state" id="emptyState">
+      Select a task or create a new one
+    </div>
+  </div>
+</div>
+
+<script>
+// --- State ---
+let tasks = [];
+let activeTaskId = null;
+let chatSessionId = null;
+let logEventSource = null;
+let projects = [];
+
+// --- Init ---
+(async () => {
+  projects = await api('GET', '/api/projects');
+  await refreshTasks();
+})();
+
+// --- API helper ---
+async function api(method, url, body) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || 'Request failed');
+  }
+  return res.json();
+}
+
+// --- Escape HTML (XSS prevention) ---
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+// --- Task List ---
+async function refreshTasks() {
+  tasks = await api('GET', '/api/tasks');
+  renderTaskList();
+}
+
+function renderTaskList() {
+  const el = document.getElementById('taskList');
+  el.textContent = '';
+  if (tasks.length === 0) {
+    const p = document.createElement('div');
+    p.style.cssText = 'padding:20px;color:var(--muted);text-align:center';
+    p.textContent = 'No tasks yet';
+    el.appendChild(p);
+    return;
+  }
+  for (const t of tasks) {
+    const item = document.createElement('div');
+    item.className = 'task-item' + (t.id === activeTaskId ? ' active' : '');
+    item.onclick = () => selectTask(t.id);
+
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = t.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-' + t.status;
+    badge.textContent = t.status;
+    const time = document.createElement('span');
+    time.textContent = timeAgo(t.created_at);
+
+    meta.appendChild(badge);
+    meta.appendChild(time);
+    item.appendChild(title);
+    item.appendChild(meta);
+    el.appendChild(item);
+  }
+}
+
+// --- Task Detail ---
+async function selectTask(id) {
+  activeTaskId = id;
+  renderTaskList();
+  const task = tasks.find(t => t.id === id);
+  if (!task) return;
+  renderTaskDetail(task);
+}
+
+function renderTaskDetail(task) {
+  const main = document.getElementById('main');
+  main.textContent = '';
+
+  // Tabs
+  const tabs = document.createElement('div');
+  tabs.className = 'tabs';
+  const tabDetail = createTab('Detail', true, () => showPanel('detail'));
+  const tabLogs = createTab('Logs', false, () => { showPanel('logs'); loadLogs(task.id); });
+  tabs.appendChild(tabDetail);
+  tabs.appendChild(tabLogs);
+  main.appendChild(tabs);
+
+  // Detail panel
+  const detailPanel = document.createElement('div');
+  detailPanel.className = 'panel';
+  detailPanel.id = 'panel-detail';
+
+  const header = document.createElement('div');
+  header.className = 'task-detail-header';
+  const titleEl = document.createElement('div');
+  titleEl.className = 'title';
+  titleEl.textContent = task.title;
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  if (task.status === 'todo') actions.appendChild(makeBtn('Start', 'btn-green btn-sm', () => startTaskAction(task.id)));
+  if (task.status === 'running') actions.appendChild(makeBtn('Stop', 'btn-red btn-sm', () => stopTaskAction(task.id)));
+  if (task.status === 'passed') actions.appendChild(makeBtn('Done', 'btn-green btn-sm', () => markDone(task.id)));
+  if (task.status === 'failed') actions.appendChild(makeBtn('Retry', 'btn-ghost btn-sm', () => retryTask(task.id)));
+
+  header.appendChild(titleEl);
+  header.appendChild(actions);
+  detailPanel.appendChild(header);
+
+  const specBox = document.createElement('div');
+  specBox.className = 'spec-box';
+  specBox.textContent = task.spec;
+  detailPanel.appendChild(specBox);
+
+  if (task.pr_url) {
+    const prLink = document.createElement('a');
+    prLink.className = 'pr-link';
+    prLink.href = task.pr_url;
+    prLink.target = '_blank';
+    prLink.textContent = 'View PR \u2192';
+    detailPanel.appendChild(prLink);
+  }
+
+  if (task.result) {
+    const resultLabel = document.createElement('strong');
+    resultLabel.style.cssText = 'font-size:12px;color:var(--muted)';
+    resultLabel.textContent = 'Result:';
+    const resultBox = document.createElement('div');
+    resultBox.className = 'spec-box';
+    resultBox.style.maxHeight = '120px';
+    resultBox.textContent = task.result;
+    detailPanel.appendChild(resultLabel);
+    detailPanel.appendChild(resultBox);
+  }
+
+  main.appendChild(detailPanel);
+
+  // Logs panel
+  const logsPanel = document.createElement('div');
+  logsPanel.className = 'panel';
+  logsPanel.id = 'panel-logs';
+  logsPanel.style.display = 'none';
+  const logViewer = document.createElement('div');
+  logViewer.className = 'log-viewer';
+  logViewer.id = 'logViewer';
+  logsPanel.appendChild(logViewer);
+  main.appendChild(logsPanel);
+
+  // Auto-show logs if running
+  if (task.status === 'running') {
+    showPanel('logs');
+    tabDetail.classList.remove('active');
+    tabLogs.classList.add('active');
+    loadLogs(task.id);
+  }
+}
+
+function createTab(label, active, onclick) {
+  const tab = document.createElement('div');
+  tab.className = 'tab' + (active ? ' active' : '');
+  tab.textContent = label;
+  tab.onclick = () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    onclick();
+  };
+  return tab;
+}
+
+function showPanel(name) {
+  document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
+  const panel = document.getElementById('panel-' + name);
+  if (panel) panel.style.display = 'flex';
+}
+
+function makeBtn(label, classes, onclick) {
+  const btn = document.createElement('button');
+  btn.className = 'btn ' + classes;
+  btn.textContent = label;
+  btn.onclick = onclick;
+  return btn;
+}
+
+// --- Logs ---
+async function loadLogs(taskId) {
+  const logs = await api('GET', '/api/tasks/' + taskId + '/logs');
+  const viewer = document.getElementById('logViewer');
+  if (!viewer) return;
+  viewer.textContent = '';
+  for (const l of logs) {
+    const line = document.createElement('div');
+    line.className = 'log-line ' + l.type;
+    line.textContent = l.content;
+    viewer.appendChild(line);
+  }
+  viewer.scrollTop = viewer.scrollHeight;
+  connectLogStream(taskId);
+}
+
+function connectLogStream(taskId) {
+  if (logEventSource) logEventSource.close();
+  logEventSource = new EventSource('/api/tasks/' + taskId + '/logs/stream');
+  logEventSource.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+    const viewer = document.getElementById('logViewer');
+    if (!viewer) return;
+
+    if (data.type === 'done') {
+      const line = document.createElement('div');
+      line.className = 'log-line system';
+      line.textContent = '--- Process exited (code: ' + data.code + ') ---';
+      viewer.appendChild(line);
+      logEventSource.close();
+      refreshTasks().then(() => { if (activeTaskId === taskId) selectTask(taskId); });
+      return;
+    }
+
+    const line = document.createElement('div');
+    line.className = 'log-line ' + data.type;
+    line.textContent = data.content;
+    viewer.appendChild(line);
+    viewer.scrollTop = viewer.scrollHeight;
+  };
+}
+
+// --- Actions ---
+async function startTaskAction(id) {
+  await api('POST', '/api/tasks/' + id + '/start');
+  await refreshTasks();
+  selectTask(id);
+}
+
+async function stopTaskAction(id) {
+  await api('POST', '/api/tasks/' + id + '/stop');
+  await refreshTasks();
+  selectTask(id);
+}
+
+async function markDone(id) {
+  await api('POST', '/api/tasks/' + id + '/status', { status: 'done' });
+  await refreshTasks();
+  selectTask(id);
+}
+
+async function retryTask(id) {
+  await api('POST', '/api/tasks/' + id + '/status', { status: 'todo' });
+  await refreshTasks();
+  selectTask(id);
+}
+
+// --- New Task (Coordinator Chat) ---
+function showNewTask() {
+  activeTaskId = null;
+  renderTaskList();
+  const main = document.getElementById('main');
+  main.textContent = '';
+
+  const container = document.createElement('div');
+  container.className = 'chat-container';
+
+  // Header with project select
+  const chatHeader = document.createElement('div');
+  chatHeader.style.cssText = 'padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--surface)';
+  const chatLabel = document.createElement('strong');
+  chatLabel.style.fontSize = '14px';
+  chatLabel.textContent = 'New Task';
+  const sel = document.createElement('select');
+  sel.id = 'chatProject';
+  sel.onchange = () => startChatSession();
+  for (const p of projects) {
+    const opt = document.createElement('option');
+    opt.value = p.path;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+  chatHeader.appendChild(chatLabel);
+  chatHeader.appendChild(sel);
+  container.appendChild(chatHeader);
+
+  // Messages
+  const messages = document.createElement('div');
+  messages.className = 'chat-messages';
+  messages.id = 'chatMessages';
+  const hint = document.createElement('div');
+  hint.style.cssText = 'color:var(--muted);text-align:center;padding:40px';
+  hint.textContent = 'Describe what you want to build. The coordinator will help refine it into a structured task.';
+  messages.appendChild(hint);
+  container.appendChild(messages);
+
+  // Input bar
+  const inputBar = document.createElement('div');
+  inputBar.className = 'chat-input-bar';
+  const input = document.createElement('input');
+  input.id = 'chatInput';
+  input.placeholder = 'e.g. 给题目加上认知层次标签';
+  input.onkeydown = (e) => { if (e.key === 'Enter') sendChat(); };
+  const sendBtn = makeBtn('Send', 'btn-accent', sendChat);
+  inputBar.appendChild(input);
+  inputBar.appendChild(sendBtn);
+  container.appendChild(inputBar);
+
+  main.appendChild(container);
+  startChatSession();
+}
+
+async function startChatSession() {
+  const project = document.getElementById('chatProject')?.value;
+  if (!project) return;
+  try {
+    const res = await api('POST', '/api/chat/start', { project });
+    chatSessionId = res.sessionId;
+  } catch (e) {
+    console.error('Failed to start chat session:', e);
+  }
+}
+
+async function sendChat() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg || !chatSessionId) return;
+  input.value = '';
+  input.disabled = true;
+
+  addChatBubble('user', msg);
+
+  try {
+    const res = await api('POST', '/api/chat/send', { sessionId: chatSessionId, message: msg });
+    addChatBubble('assistant', res.text, res.taskSpec);
+  } catch (e) {
+    addChatBubble('assistant', 'Error: ' + e.message);
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+function addChatBubble(role, text, taskSpec) {
+  const container = document.getElementById('chatMessages');
+  // Remove placeholder
+  const hint = container.querySelector('div[style*="text-align:center"]');
+  if (hint) hint.remove();
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-msg ' + role;
+
+  // Strip task-spec code block from display text
+  const displayText = text.replace(/```task-spec[\s\S]*?```/g, '').trim();
+  bubble.textContent = displayText;
+
+  if (taskSpec) {
+    const specBlock = document.createElement('div');
+    specBlock.className = 'task-spec-block';
+
+    const specTitle = document.createElement('strong');
+    specTitle.textContent = taskSpec.title;
+    specBlock.appendChild(specTitle);
+
+    const specPre = document.createElement('pre');
+    specPre.style.cssText = 'font-size:12px;margin:6px 0;white-space:pre-wrap;color:var(--muted)';
+    specPre.textContent = taskSpec.spec;
+    specBlock.appendChild(specPre);
+
+    const createBtn = makeBtn('Create Task', 'btn-green btn-sm', () => createTaskFromSpec(taskSpec));
+    specBlock.appendChild(createBtn);
+
+    bubble.appendChild(specBlock);
+  }
+
+  container.appendChild(bubble);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function createTaskFromSpec(spec) {
+  const project = document.getElementById('chatProject')?.value;
+  if (!project) return;
+  try {
+    const task = await api('POST', '/api/tasks', {
+      title: spec.title,
+      spec: spec.spec,
+      project: project,
+    });
+    await refreshTasks();
+    selectTask(task.id);
+  } catch (e) {
+    alert('Failed to create task: ' + e.message);
+  }
+}
+
+// --- Utilities ---
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso + 'Z').getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.floor(hrs / 24) + 'd ago';
+}
+
+// Auto-refresh task list every 10s
+setInterval(refreshTasks, 10000);
+</script>
+</body>
+</html>
