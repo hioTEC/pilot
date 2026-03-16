@@ -80,9 +80,14 @@ header a:hover { color: var(--text); }
 .chat-msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
 .task-spec-block { background: var(--surface2); border: 1px solid var(--accent); border-radius: 6px; padding: 10px; margin-top: 8px; }
 
-.chat-input-bar { display: flex; gap: 8px; padding: 16px; border-top: 1px solid var(--border); background: var(--surface); }
-.chat-input-bar input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; }
-.chat-input-bar input:focus { outline: none; border-color: var(--accent); }
+.chat-input-bar { display: flex; gap: 8px; padding: 16px; border-top: 1px solid var(--border); background: var(--surface); align-items: flex-end; }
+.chat-input-bar textarea { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--font); resize: none; min-height: 42px; max-height: 150px; line-height: 1.5; }
+.chat-input-bar textarea:focus { outline: none; border-color: var(--accent); }
+
+.tool-call { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; margin: 4px 0; font-family: 'SF Mono', monospace; }
+.badge-draft { background: #2d2006; color: var(--amber); }
+.streaming-indicator { display: inline-block; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; animation: pulse 1s infinite; margin-left: 6px; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* Tabs */
 .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding: 0 20px; background: var(--surface); }
@@ -235,6 +240,7 @@ function renderTaskDetail(task) {
   const actions = document.createElement('div');
   actions.className = 'actions';
 
+  if (task.status === 'draft') actions.appendChild(makeBtn('Drafting...', 'btn-ghost btn-sm', () => {}));
   if (task.status === 'todo') actions.appendChild(makeBtn('Start', 'btn-green btn-sm', () => startTaskAction(task.id)));
   if (task.status === 'running') actions.appendChild(makeBtn('Stop', 'btn-red btn-sm', () => stopTaskAction(task.id)));
   if (task.status === 'passed') actions.appendChild(makeBtn('Done', 'btn-green btn-sm', () => markDone(task.id)));
@@ -385,7 +391,10 @@ async function retryTask(id) {
   selectTask(id);
 }
 
-// --- New Task (Coordinator Chat) ---
+// --- New Task (Coordinator Chat with claude -p) ---
+let draftTaskId = null;
+let chatSending = false;
+
 function showNewTask() {
   activeTaskId = null;
   renderTaskList();
@@ -420,19 +429,26 @@ function showNewTask() {
   messages.id = 'chatMessages';
   const hint = document.createElement('div');
   hint.style.cssText = 'color:var(--muted);text-align:center;padding:40px';
-  hint.textContent = 'Describe what you want to build. The coordinator will help refine it into a structured task.';
+  hint.textContent = 'Describe what you want to build. The coordinator will explore the codebase and help refine it.';
   messages.appendChild(hint);
   container.appendChild(messages);
 
-  // Input bar
+  // Input bar (textarea for multiline)
   const inputBar = document.createElement('div');
   inputBar.className = 'chat-input-bar';
-  const input = document.createElement('input');
-  input.id = 'chatInput';
-  input.placeholder = 'e.g. 给题目加上认知层次标签';
-  input.onkeydown = (e) => { if (e.key === 'Enter') sendChat(); };
+  const textarea = document.createElement('textarea');
+  textarea.id = 'chatInput';
+  textarea.placeholder = 'e.g. 给题目加上认知层次标签 (Shift+Enter for newline)';
+  textarea.rows = 1;
+  textarea.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  };
+  textarea.oninput = () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
+  };
   const sendBtn = makeBtn('Send', 'btn-accent', sendChat);
-  inputBar.appendChild(input);
+  inputBar.appendChild(textarea);
   inputBar.appendChild(sendBtn);
   container.appendChild(inputBar);
 
@@ -446,80 +462,156 @@ async function startChatSession() {
   try {
     const res = await api('POST', '/api/chat/start', { project });
     chatSessionId = res.sessionId;
+    draftTaskId = res.taskId;
+    await refreshTasks();
   } catch (e) {
     console.error('Failed to start chat session:', e);
   }
 }
 
 async function sendChat() {
-  const input = document.getElementById('chatInput');
-  const msg = input.value.trim();
+  if (chatSending) return;
+  const textarea = document.getElementById('chatInput');
+  const msg = textarea.value.trim();
   if (!msg || !chatSessionId) return;
-  input.value = '';
-  input.disabled = true;
+  textarea.value = '';
+  textarea.style.height = 'auto';
+  chatSending = true;
 
   addChatBubble('user', msg);
 
-  try {
-    const res = await api('POST', '/api/chat/send', { sessionId: chatSessionId, message: msg });
-    addChatBubble('assistant', res.text, res.taskSpec);
-  } catch (e) {
-    addChatBubble('assistant', 'Error: ' + e.message);
-  } finally {
-    input.disabled = false;
-    input.focus();
-  }
+  // Create streaming assistant bubble
+  const container = document.getElementById('chatMessages');
+  const hint = container.querySelector('div[style*="text-align:center"]');
+  if (hint) hint.remove();
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-msg assistant';
+  const textEl = document.createElement('span');
+  textEl.id = 'streamingText';
+  const indicator = document.createElement('span');
+  indicator.className = 'streaming-indicator';
+  bubble.appendChild(textEl);
+  bubble.appendChild(indicator);
+  container.appendChild(bubble);
+  container.scrollTop = container.scrollHeight;
+
+  // SSE streaming
+  const url = '/api/chat/' + encodeURIComponent(chatSessionId) + '/send?message=' + encodeURIComponent(msg);
+  const es = new EventSource(url);
+  let fullText = '';
+  let toolCalls = [];
+  let taskSpec = null;
+
+  es.onmessage = (e) => {
+    const data = JSON.parse(e.data);
+
+    if (data.type === 'done') {
+      es.close();
+      chatSending = false;
+      fullText = data.text || fullText;
+      taskSpec = data.taskSpec;
+      toolCalls = data.toolCalls || toolCalls;
+
+      // Finalize the bubble
+      indicator.remove();
+      const displayText = fullText.replace(/```task-spec[\s\S]*?```/g, '').trim();
+      textEl.textContent = displayText;
+
+      // Show tool calls summary
+      if (toolCalls.length > 0) {
+        const toolSummary = document.createElement('div');
+        toolSummary.style.cssText = 'margin-top:6px';
+        for (const tc of toolCalls) {
+          const tcEl = document.createElement('div');
+          tcEl.className = 'tool-call';
+          tcEl.textContent = tc.tool + ': ' + tc.input;
+          toolSummary.appendChild(tcEl);
+        }
+        bubble.appendChild(toolSummary);
+      }
+
+      // Show task spec card if present
+      if (taskSpec) {
+        const specBlock = document.createElement('div');
+        specBlock.className = 'task-spec-block';
+        const specTitle = document.createElement('strong');
+        specTitle.textContent = taskSpec.title;
+        specBlock.appendChild(specTitle);
+        const specPre = document.createElement('pre');
+        specPre.style.cssText = 'font-size:12px;margin:6px 0;white-space:pre-wrap;color:var(--muted)';
+        specPre.textContent = taskSpec.spec;
+        specBlock.appendChild(specPre);
+        const finalizeBtn = makeBtn('Confirm Task', 'btn-green btn-sm', () => finalizeTask(taskSpec));
+        specBlock.appendChild(finalizeBtn);
+        bubble.appendChild(specBlock);
+      }
+
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('chatInput')?.focus();
+      return;
+    }
+
+    if (data.type === 'error') {
+      es.close();
+      chatSending = false;
+      indicator.remove();
+      textEl.textContent = 'Error: ' + data.error;
+      document.getElementById('chatInput')?.focus();
+      return;
+    }
+
+    // Stream assistant text chunks
+    if (data.type === 'assistant' && data.message?.content) {
+      for (const block of data.message.content) {
+        if (block.type === 'text') {
+          fullText += block.text;
+          textEl.textContent = fullText.replace(/```task-spec[\s\S]*?```/g, '').trim();
+        }
+        if (block.type === 'tool_use') {
+          const tcEl = document.createElement('div');
+          tcEl.className = 'tool-call';
+          const input = block.input?.file_path || block.input?.pattern || block.input?.command || '';
+          tcEl.textContent = block.name + ': ' + (typeof input === 'string' ? input : JSON.stringify(input)).slice(0, 150);
+          bubble.insertBefore(tcEl, indicator);
+        }
+      }
+      container.scrollTop = container.scrollHeight;
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    chatSending = false;
+    indicator.remove();
+    if (!fullText) textEl.textContent = 'Connection lost. Try again.';
+    document.getElementById('chatInput')?.focus();
+  };
 }
 
-function addChatBubble(role, text, taskSpec) {
+function addChatBubble(role, text) {
   const container = document.getElementById('chatMessages');
-  // Remove placeholder
   const hint = container.querySelector('div[style*="text-align:center"]');
   if (hint) hint.remove();
 
   const bubble = document.createElement('div');
   bubble.className = 'chat-msg ' + role;
-
-  // Strip task-spec code block from display text
-  const displayText = text.replace(/```task-spec[\s\S]*?```/g, '').trim();
-  bubble.textContent = displayText;
-
-  if (taskSpec) {
-    const specBlock = document.createElement('div');
-    specBlock.className = 'task-spec-block';
-
-    const specTitle = document.createElement('strong');
-    specTitle.textContent = taskSpec.title;
-    specBlock.appendChild(specTitle);
-
-    const specPre = document.createElement('pre');
-    specPre.style.cssText = 'font-size:12px;margin:6px 0;white-space:pre-wrap;color:var(--muted)';
-    specPre.textContent = taskSpec.spec;
-    specBlock.appendChild(specPre);
-
-    const createBtn = makeBtn('Create Task', 'btn-green btn-sm', () => createTaskFromSpec(taskSpec));
-    specBlock.appendChild(createBtn);
-
-    bubble.appendChild(specBlock);
-  }
-
+  bubble.textContent = text;
   container.appendChild(bubble);
   container.scrollTop = container.scrollHeight;
 }
 
-async function createTaskFromSpec(spec) {
-  const project = document.getElementById('chatProject')?.value;
-  if (!project) return;
+async function finalizeTask(spec) {
+  if (!draftTaskId) return;
   try {
-    const task = await api('POST', '/api/tasks', {
+    await api('POST', '/api/tasks/' + draftTaskId + '/finalize', {
       title: spec.title,
       spec: spec.spec,
-      project: project,
     });
     await refreshTasks();
-    selectTask(task.id);
+    selectTask(draftTaskId);
   } catch (e) {
-    alert('Failed to create task: ' + e.message);
+    alert('Failed to finalize task: ' + e.message);
   }
 }
 

@@ -1,6 +1,6 @@
 import express from "express";
 import crypto from "crypto";
-import { createTask, getTask, listTasks, updateTaskStatus, getLogs } from "./lib/db.js";
+import { createTask, getTask, listTasks, updateTaskStatus, updateTaskSpec, getLogs } from "./lib/db.js";
 import { createSession } from "./lib/coordinator.js";
 import { startTask, stopTask, isRunning } from "./lib/runner.js";
 import { discoverProjects } from "./lib/context.js";
@@ -163,16 +163,18 @@ app.get("/api/tasks/:id/logs", (req, res) => {
   res.json(getLogs(Number(req.params.id), sinceId));
 });
 
-// --- API: Coordinator chat ---
-const sessions = new Map(); // sessionId -> chat session
+// --- API: Coordinator chat (claude -p based) ---
+const sessions = new Map(); // sessionId -> { session, taskId }
 
 app.post("/api/chat/start", (req, res) => {
   const { project } = req.body;
   if (!project) return res.status(400).json({ error: "project path required" });
 
+  // Create a draft task as placeholder
+  const task = createTask("(draft)", "", project, "draft");
   const sessionId = crypto.randomUUID();
   const session = createSession(project);
-  sessions.set(sessionId, session);
+  sessions.set(sessionId, { session, taskId: task.id });
 
   // Clean old sessions (keep max 10)
   if (sessions.size > 10) {
@@ -180,20 +182,43 @@ app.post("/api/chat/start", (req, res) => {
     sessions.delete(oldest);
   }
 
-  res.json({ sessionId });
+  res.json({ sessionId, taskId: task.id });
 });
 
-app.post("/api/chat/send", async (req, res) => {
-  const { sessionId, message } = req.body;
-  const session = sessions.get(sessionId);
-  if (!session) return res.status(404).json({ error: "Session not found. Start a new chat." });
+app.get("/api/chat/:sessionId/send", (req, res) => {
+  const { sessionId } = req.params;
+  const message = req.query.message;
+  const entry = sessions.get(sessionId);
+  if (!entry) return res.status(404).json({ error: "Session not found. Start a new chat." });
 
-  try {
-    const result = await session.send(message);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  // SSE response for streaming
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write(":\n\n");
+
+  entry.session.send(message, (event) => {
+    // Stream each event to the client
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }).then((result) => {
+    // Send final result
+    res.write(`data: ${JSON.stringify({ type: "done", text: result.text, taskSpec: result.taskSpec, toolCalls: result.toolCalls })}\n\n`);
+    res.end();
+  }).catch((err) => {
+    res.write(`data: ${JSON.stringify({ type: "error", error: err.message })}\n\n`);
+    res.end();
+  });
+});
+
+// Finalize a draft task with the spec from coordinator
+app.post("/api/tasks/:id/finalize", (req, res) => {
+  const { title, spec } = req.body;
+  if (!title || !spec) return res.status(400).json({ error: "title and spec required" });
+  const task = updateTaskSpec(Number(req.params.id), title, spec, "todo");
+  if (!task) return res.status(404).json({ error: "Not found" });
+  res.json(task);
 });
 
 // --- API: Projects ---
