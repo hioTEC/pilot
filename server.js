@@ -1,9 +1,10 @@
 import express from "express";
 import crypto from "crypto";
-import { createTask, getTask, listTasks, updateTaskStatus, updateTaskSpec, getLogs } from "./lib/db.js";
+import { createTask, getTask, listTasks, updateTaskStatus, updateTaskSpec, updateTaskFields, getLogs } from "./lib/db.js";
 import { createSession } from "./lib/coordinator.js";
 import { startTask, stopTask, isRunning } from "./lib/runner.js";
 import { discoverProjects } from "./lib/context.js";
+import { queue } from "./lib/queue.js";
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -114,12 +115,25 @@ app.get("/api/tasks/:id", (req, res) => {
 });
 
 app.post("/api/tasks", (req, res) => {
-  const { title, spec, project } = req.body;
+  const { title, spec, project, priority, dependsOn, timeoutMinutes } = req.body;
   if (!title || !spec || !project) {
     return res.status(400).json({ error: "title, spec, and project are required" });
   }
-  const task = createTask(title, spec, project);
+  const task = createTask(title, spec, project, "todo", {
+    priority: priority || 0,
+    dependsOn: dependsOn || null,
+    timeoutMinutes: timeoutMinutes || 30,
+  });
   res.status(201).json(task);
+});
+
+app.patch("/api/tasks/:id", (req, res) => {
+  const { priority, dependsOn, timeoutMinutes } = req.body;
+  const task = updateTaskFields(Number(req.params.id), {
+    priority, dependsOn, timeoutMinutes,
+  });
+  if (!task) return res.status(404).json({ error: "Not found" });
+  res.json(task);
 });
 
 app.post("/api/tasks/:id/start", (req, res) => {
@@ -227,7 +241,66 @@ app.get("/api/projects", (_req, res) => {
   res.json(discoverProjects());
 });
 
+// --- Global SSE: system events (notifications) ---
+const globalClients = new Set();
+
+app.get("/api/events", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.write(":\n\n");
+  globalClients.add(res);
+  req.on("close", () => globalClients.delete(res));
+});
+
+function broadcastEvent(event) {
+  const data = JSON.stringify(event);
+  for (const client of globalClients) {
+    client.write(`data: ${data}\n\n`);
+  }
+}
+
+// --- API: Queue ---
+
+app.get("/api/queue/status", (_req, res) => {
+  res.json(queue.getStatus());
+});
+
+app.post("/api/queue/toggle", (req, res) => {
+  const { enabled } = req.body;
+  queue.setEnabled(enabled);
+  broadcastEvent({ type: "queue", ...queue.getStatus() });
+  res.json(queue.getStatus());
+});
+
+app.post("/api/queue/concurrency", (req, res) => {
+  const { max } = req.body;
+  queue.setMaxConcurrent(max);
+  broadcastEvent({ type: "queue", ...queue.getStatus() });
+  res.json(queue.getStatus());
+});
+
 // --- Start ---
+
+// Initialize queue with callbacks
+queue.init({
+  onLog: broadcastLog,
+  onDone: (id, code) => {
+    const clients = sseClients.get(id);
+    if (clients) {
+      const data = JSON.stringify({ type: "done", code });
+      for (const c of clients) c.write(`data: ${data}\n\n`);
+    }
+  },
+  onNotify: (taskId, result, title) => {
+    broadcastEvent({ type: "task", event: result, taskId, title });
+    // Also broadcast updated queue status
+    broadcastEvent({ type: "queue", ...queue.getStatus() });
+  },
+});
+
 app.listen(PORT, () => {
   console.log(`Pilot running on http://localhost:${PORT}`);
 });

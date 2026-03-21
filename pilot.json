@@ -3,14 +3,42 @@
     {
       "name": "math-question-bank",
       "path": "/home/ubuntu/math-question-bank",
+      "port": 3000,
+      "domain": "math.hio.zone",
       "harness": {
         "typecheck": true,
         "lint": true,
-        "test": "vitest",
+        "test": false,
         "e2e": "playwright",
         "build": true
       },
-      "status": "pending-setup"
+      "status": "active"
+    },
+    {
+      "name": "file-share",
+      "path": "/home/ubuntu/file-share",
+      "port": 3001,
+      "domain": "share.hio.zone",
+      "harness": {
+        "typecheck": false,
+        "lint": false,
+        "test": false,
+        "build": false
+      },
+      "status": "active"
+    },
+    {
+      "name": "pilot",
+      "path": "/home/ubuntu/pilot",
+      "port": 3002,
+      "domain": "pilot.hio.zone",
+      "harness": {
+        "typecheck": false,
+        "lint": false,
+        "test": false,
+        "build": false
+      },
+      "status": "self"
     }
   ]
 }

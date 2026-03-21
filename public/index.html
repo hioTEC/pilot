@@ -97,6 +97,36 @@ header a:hover { color: var(--text); }
 
 select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; }
 
+/* Queue status */
+.queue-on { color: var(--green) !important; }
+.queue-off { color: var(--muted) !important; }
+
+/* Quick task form */
+.quick-form { padding: 20px; display: flex; flex-direction: column; gap: 12px; max-width: 600px; }
+.quick-form label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.quick-form input, .quick-form textarea, .quick-form select {
+  width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--font);
+}
+.quick-form textarea { resize: vertical; min-height: 120px; line-height: 1.6; }
+.quick-form .row { display: flex; gap: 12px; }
+.quick-form .row > div { flex: 1; }
+.toast { position: fixed; top: 70px; right: 20px; padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 100; animation: fadeIn .2s; }
+.toast-success { background: #14532d; color: var(--green); border: 1px solid #166534; }
+.toast-error { background: #451a1a; color: var(--red); border: 1px solid #7f1d1d; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Task meta enhancements */
+.priority-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; }
+.priority-0 { display: none; }
+.priority-1 { background: #1e3a5f; color: var(--blue); }
+.priority-2 { background: #451a1a; color: var(--red); }
+
+/* Field group in task detail */
+.field-row { display: flex; gap: 12px; align-items: center; font-size: 13px; }
+.field-row label { color: var(--muted); min-width: 80px; }
+.field-row select, .field-row input { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; }
+
 @media (max-width: 768px) {
   .app { grid-template-columns: 1fr; }
   .sidebar { display: none; }
@@ -108,6 +138,8 @@ select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
 <div class="app">
   <header>
     <h1>Pilot</h1>
+    <span id="queueStatus" style="font-size:12px;color:var(--muted)">Queue: OFF</span>
+    <button class="btn btn-sm btn-ghost" id="queueToggle" onclick="toggleQueue()" style="font-size:12px;padding:4px 10px">Enable Queue</button>
     <span class="spacer"></span>
     <a href="/logout">Logout</a>
   </header>
@@ -115,7 +147,8 @@ select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
   <div class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <h2>Tasks</h2>
-      <button class="btn btn-accent btn-sm" onclick="showNewTask()">+ New</button>
+      <button class="btn btn-accent btn-sm" onclick="showQuickTask()">+ Quick</button>
+      <button class="btn btn-ghost btn-sm" onclick="showNewTask()">Chat</button>
     </div>
     <div class="task-list" id="taskList"></div>
   </div>
@@ -135,10 +168,15 @@ let chatSessionId = null;
 let logEventSource = null;
 let projects = [];
 
+let queueEnabled = false;
+
 // --- Init ---
 (async () => {
   projects = await api('GET', '/api/projects');
   await refreshTasks();
+  await refreshQueueStatus();
+  initNotifications();
+  initGlobalEvents();
 })();
 
 // --- API helper ---
@@ -180,6 +218,13 @@ function renderTaskList() {
     el.appendChild(p);
     return;
   }
+
+  // Compute queue positions for todo tasks
+  const todoTasks = tasks.filter(t => t.status === 'todo')
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0));
+  const queuePos = new Map();
+  todoTasks.forEach((t, i) => queuePos.set(t.id, i + 1));
+
   for (const t of tasks) {
     const item = document.createElement('div');
     item.className = 'task-item' + (t.id === activeTaskId ? ' active' : '');
@@ -187,7 +232,8 @@ function renderTaskList() {
 
     const title = document.createElement('div');
     title.className = 'title';
-    title.textContent = t.title;
+    const pos = queuePos.get(t.id);
+    title.textContent = (pos ? '#' + pos + ' ' : '') + t.title;
 
     const meta = document.createElement('div');
     meta.className = 'meta';
@@ -196,8 +242,15 @@ function renderTaskList() {
     badge.textContent = t.status;
     const time = document.createElement('span');
     time.textContent = timeAgo(t.created_at);
-
     meta.appendChild(badge);
+
+    if ((t.priority || 0) > 0) {
+      const pBadge = document.createElement('span');
+      pBadge.className = 'priority-badge priority-' + t.priority;
+      pBadge.textContent = t.priority === 2 ? 'URGENT' : 'HIGH';
+      meta.appendChild(pBadge);
+    }
+
     meta.appendChild(time);
     item.appendChild(title);
     item.appendChild(meta);
@@ -254,6 +307,55 @@ function renderTaskDetail(task) {
   specBox.className = 'spec-box';
   specBox.textContent = task.spec;
   detailPanel.appendChild(specBox);
+
+  // Priority / Timeout / Depends-on fields (editable for todo tasks)
+  if (task.status === 'todo' || task.status === 'draft') {
+    const fieldRow = document.createElement('div');
+    fieldRow.className = 'field-row';
+    fieldRow.style.flexWrap = 'wrap';
+    fieldRow.style.gap = '12px';
+
+    const priLabel = document.createElement('label');
+    priLabel.textContent = 'Priority:';
+    const priSel = document.createElement('select');
+    priSel.id = 'editPriority';
+    for (const [v, l] of [['0','Normal'],['1','High'],['2','Urgent']]) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = l;
+      if (String(task.priority || 0) === v) o.selected = true;
+      priSel.appendChild(o);
+    }
+
+    const toLabel = document.createElement('label');
+    toLabel.textContent = 'Timeout:';
+    const toInp = document.createElement('input');
+    toInp.id = 'editTimeout';
+    toInp.type = 'number';
+    toInp.value = String(task.timeout_minutes || 30);
+    toInp.min = '5'; toInp.max = '180';
+    toInp.style.width = '60px';
+
+    const toUnit = document.createElement('span');
+    toUnit.textContent = 'min';
+    toUnit.style.cssText = 'font-size:12px;color:var(--muted)';
+
+    const saveBtn = makeBtn('Save', 'btn-ghost btn-sm', () => saveTaskFields(task.id));
+
+    fieldRow.appendChild(priLabel);
+    fieldRow.appendChild(priSel);
+    fieldRow.appendChild(toLabel);
+    fieldRow.appendChild(toInp);
+    fieldRow.appendChild(toUnit);
+    fieldRow.appendChild(saveBtn);
+    detailPanel.appendChild(fieldRow);
+  } else {
+    // Show read-only for non-todo tasks
+    const infoRow = document.createElement('div');
+    infoRow.style.cssText = 'font-size:12px;color:var(--muted);display:flex;gap:16px';
+    const priNames = ['Normal', 'High', 'Urgent'];
+    infoRow.textContent = 'Priority: ' + (priNames[task.priority] || 'Normal') + ' \u00b7 Timeout: ' + (task.timeout_minutes || 30) + 'min';
+    detailPanel.appendChild(infoRow);
+  }
 
   if (task.pr_url) {
     const prLink = document.createElement('a');
@@ -389,6 +491,19 @@ async function retryTask(id) {
   await api('POST', '/api/tasks/' + id + '/status', { status: 'todo' });
   await refreshTasks();
   selectTask(id);
+}
+
+async function saveTaskFields(id) {
+  const priority = Number(document.getElementById('editPriority')?.value) || 0;
+  const timeoutMinutes = Number(document.getElementById('editTimeout')?.value) || 30;
+  try {
+    await api('PATCH', '/api/tasks/' + id, { priority, timeoutMinutes });
+    showToast('Task updated');
+    await refreshTasks();
+    selectTask(id);
+  } catch (e) {
+    showToast('Failed: ' + e.message, 'error');
+  }
 }
 
 // --- New Task (Coordinator Chat with claude -p) ---
@@ -627,8 +742,221 @@ function timeAgo(iso) {
   return Math.floor(hrs / 24) + 'd ago';
 }
 
-// Auto-refresh task list every 10s
+// --- Queue Controls ---
+
+async function refreshQueueStatus() {
+  try {
+    const status = await api('GET', '/api/queue/status');
+    queueEnabled = status.enabled;
+    updateQueueDisplay(status);
+  } catch {}
+}
+
+function updateQueueDisplay(status) {
+  const el = document.getElementById('queueStatus');
+  const btn = document.getElementById('queueToggle');
+  if (!el || !btn) return;
+  queueEnabled = status.enabled;
+  if (status.enabled) {
+    el.textContent = 'Queue: ON \u00b7 ' + status.running + ' running \u00b7 ' + status.queued + ' queued';
+    el.className = 'queue-on';
+    btn.textContent = 'Pause Queue';
+    btn.className = 'btn btn-sm btn-red';
+    btn.style.fontSize = '12px';
+    btn.style.padding = '4px 10px';
+  } else {
+    el.textContent = 'Queue: OFF \u00b7 ' + status.queued + ' queued';
+    el.className = 'queue-off';
+    btn.textContent = 'Enable Queue';
+    btn.className = 'btn btn-sm btn-green';
+    btn.style.fontSize = '12px';
+    btn.style.padding = '4px 10px';
+  }
+}
+
+async function toggleQueue() {
+  try {
+    const status = await api('POST', '/api/queue/toggle', { enabled: !queueEnabled });
+    updateQueueDisplay(status);
+  } catch (e) {
+    showToast('Failed to toggle queue: ' + e.message, 'error');
+  }
+}
+
+// --- Quick Task Creation ---
+
+function showQuickTask() {
+  activeTaskId = null;
+  renderTaskList();
+  const main = document.getElementById('main');
+  main.textContent = '';
+
+  const form = document.createElement('div');
+  form.className = 'quick-form';
+
+  const heading = document.createElement('h2');
+  heading.style.cssText = 'font-size:16px;font-weight:700';
+  heading.textContent = 'Quick Task';
+  form.appendChild(heading);
+
+  // Project
+  form.appendChild(makeField('Project', () => {
+    const sel = document.createElement('select');
+    sel.id = 'qtProject';
+    for (const p of projects) {
+      const opt = document.createElement('option');
+      opt.value = p.path;
+      opt.textContent = p.name;
+      sel.appendChild(opt);
+    }
+    return sel;
+  }));
+
+  // Title
+  form.appendChild(makeField('Title', () => {
+    const inp = document.createElement('input');
+    inp.id = 'qtTitle';
+    inp.type = 'text';
+    inp.placeholder = 'e.g. Add user authentication';
+    return inp;
+  }));
+
+  // Spec
+  form.appendChild(makeField('Spec', () => {
+    const ta = document.createElement('textarea');
+    ta.id = 'qtSpec';
+    ta.placeholder = 'Detailed task specification...\n\n1. Goal\n2. Scope\n3. Steps\n4. Acceptance criteria';
+    return ta;
+  }));
+
+  // Priority + Timeout row
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.appendChild(makeField('Priority', () => {
+    const sel = document.createElement('select');
+    sel.id = 'qtPriority';
+    for (const [val, label] of [['0','Normal'],['1','High'],['2','Urgent']]) {
+      const opt = document.createElement('option');
+      opt.value = val;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    }
+    return sel;
+  }));
+  row.appendChild(makeField('Timeout (min)', () => {
+    const inp = document.createElement('input');
+    inp.id = 'qtTimeout';
+    inp.type = 'number';
+    inp.value = '30';
+    inp.min = '5';
+    inp.max = '180';
+    return inp;
+  }));
+  form.appendChild(row);
+
+  // Buttons
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px';
+  btnRow.appendChild(makeBtn('Create Task', 'btn-accent', () => submitQuickTask()));
+  btnRow.appendChild(makeBtn('Create & Start', 'btn-ghost', () => submitQuickTask(true)));
+  form.appendChild(btnRow);
+
+  main.appendChild(form);
+  document.getElementById('qtTitle')?.focus();
+}
+
+function makeField(labelText, inputFn) {
+  const div = document.createElement('div');
+  const label = document.createElement('label');
+  label.textContent = labelText;
+  div.appendChild(label);
+  div.appendChild(inputFn());
+  return div;
+}
+
+async function submitQuickTask(autoStart = false) {
+  const title = document.getElementById('qtTitle')?.value.trim();
+  const spec = document.getElementById('qtSpec')?.value.trim();
+  const project = document.getElementById('qtProject')?.value;
+  const priority = Number(document.getElementById('qtPriority')?.value) || 0;
+  const timeoutMinutes = Number(document.getElementById('qtTimeout')?.value) || 30;
+
+  if (!title || !spec) {
+    showToast('Title and spec are required', 'error');
+    return;
+  }
+
+  try {
+    const task = await api('POST', '/api/tasks', { title, spec, project, priority, timeoutMinutes });
+    showToast('Task #' + task.id + ' created');
+    await refreshTasks();
+
+    if (autoStart) {
+      await api('POST', '/api/tasks/' + task.id + '/start');
+      await refreshTasks();
+      selectTask(task.id);
+    } else {
+      document.getElementById('qtTitle').value = '';
+      document.getElementById('qtSpec').value = '';
+      document.getElementById('qtTitle').focus();
+    }
+  } catch (e) {
+    showToast('Failed: ' + e.message, 'error');
+  }
+}
+
+// --- Notifications ---
+
+function initNotifications() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function initGlobalEvents() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      if (event.type === 'queue') {
+        updateQueueDisplay(event);
+      }
+      if (event.type === 'task') {
+        refreshTasks().then(() => {
+          if (activeTaskId === event.taskId) selectTask(event.taskId);
+        });
+        if (event.event === 'passed') {
+          notify('Task Passed', event.title + ' completed successfully');
+        } else if (event.event === 'failed') {
+          notify('Task Failed', event.title + ' failed');
+        } else if (event.event === 'timeout') {
+          notify('Task Timeout', event.title + ' timed out');
+        }
+      }
+    } catch {}
+  };
+}
+
+function notify(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body });
+  }
+  showToast(title + ': ' + body, title.includes('Failed') || title.includes('Timeout') ? 'error' : 'success');
+}
+
+// --- Toast ---
+
+function showToast(msg, type = 'success') {
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 4000);
+}
+
+// Auto-refresh
 setInterval(refreshTasks, 10000);
+setInterval(refreshQueueStatus, 10000);
 </script>
 </body>
 </html>
