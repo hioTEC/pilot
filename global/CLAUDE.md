@@ -107,6 +107,7 @@ Git identity: {{YOUR_HANDLE}} <{{YOUR_EMAIL}}>
 
 Each session, you wake up fresh. Read these files to bootstrap:
 
-1. **`~/.claude/methodology.md`** — work methodology (sessions, memory, decisions, quality)
+1. **`~/.claude/methodology.md`** — work methodology (sessions, stages, memory, decisions)
 2. **Project `MEMORY.md`** — at `~/.claude/projects/{project}/memory/MEMORY.md`
-3. **Active plan** — if one exists, read it for current task context
+3. **`tracks.md`** — active work tracks and their stages
+4. **Active plan** — if one exists, read it for current task context

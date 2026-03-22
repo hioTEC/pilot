@@ -28,11 +28,19 @@
 
 每个文件遵循格式：frontmatter + L1（前25行核心信息）+ L2（详情）。
 
-### 4. 更新 MEMORY.md 索引
+### 4. 更新 tracks 状态
+
+读取 `tracks.md`，根据本次会话的工作更新：
+- 推进了哪个 track？stage 是否变化？
+- 有没有新的 track 产生？
+- 有没有 track 完成，应移入 Done？
+- 下次 session 建议从哪个 track 继续？
+
+### 5. 更新 MEMORY.md 索引
 
 为每个新建/修改的文件在 Index 对应分类下添加或更新一行 L0 描述。
 
-### 5. 审计摘要
+### 6. 审计摘要
 
 统计本次会话的 harness 合规情况：
 
@@ -54,8 +62,13 @@
 - 本次是否涉及高风险动作？
 - 如果是，是否在执行前检索了 cases/？
 
+### Tracks
+- 本次推进了: [track name] stage → stage
+- 新增 track: ...
+- 完成 track: ...
+
 ### 建议
-- 下次会话可以从 xxx 继续
+- 下次会话可以从 [track name] 的 [stage] 继续
 - CLAUDE.md 有待更新的内容: ...
 ```
 
