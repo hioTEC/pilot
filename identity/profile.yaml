@@ -1,0 +1,12 @@
+# User identity — used by setup.sh for git config and agent personalization
+name:
+  display: "Your Name"
+
+handle: your-handle
+email: you@example.com
+timezone: "UTC+00:00"
+languages: [en]
+
+git:
+  name: your-handle
+  email: you@example.com

@@ -1,0 +1,101 @@
+#!/bin/bash
+# dot — dotfiles meta-command (thin wrapper over ops/)
+set -euo pipefail
+
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="${DOTFILES_DIR}:${PYTHONPATH:-}"
+
+
+cmd_status() {
+    echo "=== Machine ==="
+    if [[ -f "$HOME/.machine-id" ]]; then
+        echo "  ID: $(cat "$HOME/.machine-id")"
+    else
+        echo "  ID: (not set — run setup.sh)"
+    fi
+    echo "  Platform: $(uname -s)/$(uname -m)"
+
+    echo ""
+    echo "=== Secrets ==="
+    if [[ -f "${DOTFILES_DIR}/.env" ]]; then
+        local age=$(( ($(date +%s) - $(stat -c %Y "${DOTFILES_DIR}/.env" 2>/dev/null || stat -f %m "${DOTFILES_DIR}/.env" 2>/dev/null)) / 3600 ))
+        echo "  .env: exists (${age}h old)"
+    else
+        echo "  .env: missing (run: dot sync)"
+    fi
+
+    echo ""
+    echo "=== Git ==="
+    git -C "${DOTFILES_DIR}" status --short --branch
+
+    echo ""
+    python3 -c "from ops.status import print_status; print_status()"
+}
+
+cmd_sync() {
+    echo "Pulling latest..."
+    git -C "${DOTFILES_DIR}" pull --rebase
+
+    echo "Decrypting secrets..."
+    "${DOTFILES_DIR}/bin/secrets" env "${DOTFILES_DIR}"
+
+    echo "Regenerating SSH config..."
+    python3 "${DOTFILES_DIR}/bin/ssh-gen-config"
+}
+
+cmd_push() {
+    if [[ -z "$(git -C "${DOTFILES_DIR}" status --porcelain)" ]]; then
+        echo "Nothing to push (clean)"
+        return 0
+    fi
+    local machine="unknown"
+    [[ -f "$HOME/.machine-id" ]] && machine="$(cat "$HOME/.machine-id")"
+
+    git -C "${DOTFILES_DIR}" add -A
+    git -C "${DOTFILES_DIR}" commit -m "sync: ${machine} $(date +%Y-%m-%d\ %H:%M)"
+    git -C "${DOTFILES_DIR}" push
+}
+
+cmd_pull() {
+    git -C "${DOTFILES_DIR}" pull --rebase
+    "${DOTFILES_DIR}/setup.sh"
+}
+
+cmd_backup() {
+    python3 -c "from ops.backup import run_backup; print(run_backup())"
+}
+
+cmd_check() {
+    python3 -c "from ops.reconcile import print_actions; print_actions()"
+}
+
+cmd_help() {
+    cat <<'HELP'
+Usage: dot <command>
+
+Commands:
+  status    Full infrastructure status
+  sync      git pull + decrypt secrets + regen SSH config
+  push      Commit local changes + push to GitHub
+  pull      Pull from GitHub + run setup.sh
+  backup    Run cloud backup (reads desired-state.yaml)
+  check     Reconcile: compare desired vs actual state
+  help      This help
+
+Workflow:
+  dot pull            Before working — get latest config
+  (make changes)
+  dot push            After changes — commit & push
+HELP
+}
+
+case "${1:-help}" in
+    status)  cmd_status ;;
+    sync)    cmd_sync ;;
+    push)    cmd_push ;;
+    pull)    cmd_pull ;;
+    backup)  cmd_backup ;;
+    check)   cmd_check ;;
+    help|--help|-h) cmd_help ;;
+    *) echo "Unknown: $1" >&2; cmd_help; exit 1 ;;
+esac

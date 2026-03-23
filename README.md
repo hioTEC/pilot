@@ -1,123 +1,130 @@
-# Pilot — Harness Engineering
+# Pilot
 
-A methodology framework for autonomous AI agent development with Claude Code.
+Dotfiles framework for multi-machine development with Claude Code agent integration.
 
-## Three Pillars
+## What This Is
 
-1. **Decision Trail** — Every non-obvious decision recorded as an immutable event
-2. **Progressive Maturity** — Validate before expanding
-3. **Agent Autonomy** — Default to action, pause only when genuinely uncertain
+A complete infrastructure-as-code setup that manages:
+
+- **Agent configuration** — Claude Code identity, methodology, memory, hooks, slash commands
+- **CLI tools** — `dot` (infra meta-command), `claw` (workspace agent launcher), `secrets` (age encryption)
+- **Infrastructure state** — declarative YAML for machines, repos, domains, services
+- **Operations** — Python modules for status, SSH batch ops, backup, reconciliation
+- **Cross-machine sync** — git-based config propagation via symlinks
 
 ## Architecture
 
-Pilot is a **stateless framework**. It provides methodology and tooling — no memory or personal state.
-
-Memory lives in your project repos (e.g., your dotfiles or any project), synced via git.
-
 ```
-pilot (framework — clone once per machine)
-├── global/           CLAUDE.md, methodology.md, commands/
-├── project/          Templates for new projects
-├── hooks/            Optional quality hooks
-├── scripts/          Standalone tools
-├── install-global.sh One-time machine setup
-└── install-project.sh Per-project memory setup
-
-your-project (state — synced via git)
-└── .claude/memory/   Memory files tracked in this repo's git
-    ├── MEMORY.md     L0 index (always loaded by agent)
-    ├── events/       Decisions & milestones (immutable)
-    ├── cases/        Problem-solution pairs (immutable)
-    ├── patterns/     Reusable workflows (mergeable)
-    └── ...
+pilot/
+├── .claude/                    # Claude Code configuration
+│   ├── CLAUDE.md               # Agent identity + trust boundaries
+│   ├── methodology.md          # Session lifecycle + tracks + memory protocol
+│   ├── tools.md                # Tool registry (gstack, models, plugins)
+│   ├── settings.json           # Permissions, hooks, plugins
+│   ├── commands/               # Slash commands (/wrap, /try, /drop, /delete)
+│   └── hooks/                  # Session hooks (bootstrap.sh)
+│
+├── bin/                        # CLI tools (added to $PATH)
+│   ├── dot                     # Infrastructure meta-command
+│   ├── claw                    # Workspace agent launcher
+│   ├── secrets                 # age-encrypted secrets management
+│   └── ssh-gen-config          # Generate SSH config from machines.yaml
+│
+├── infra/                      # Infrastructure state (YAML)
+│   ├── machines.yaml           # Server + dev machine registry
+│   ├── repos.yaml              # Workspace repos + trust levels
+│   ├── domains.yaml            # Domain DNS configuration
+│   ├── services.yaml           # Running services per machine
+│   └── desired-state.yaml      # Desired state for reconciliation
+│
+├── identity/                   # User identity
+│   ├── profile.yaml            # Name, email, timezone, git config
+│   └── aliases.sh              # Shell functions (model wrappers, etc.)
+│
+├── ops/                        # Infrastructure operations (Python)
+│   ├── __init__.py             # YAML loaders
+│   ├── status.py               # Unified status display
+│   └── reconcile.py            # Desired vs actual state diff
+│
+├── plans/                      # Implementation plans (per track)
+├── setup.sh                    # Bootstrap script (one command per machine)
+└── .gitignore
 ```
 
-### Layered Harness
-
-Three layers aligned with Claude Code's scoping:
-
-| Layer | Scope | Contents |
-|-------|-------|----------|
-| **Identity** | `~/.claude/CLAUDE.md` | Who the agent is, who the user is, trust boundaries |
-| **Methodology** | `~/.claude/methodology.md` | Session lifecycle, memory protocol, decision trails |
-| **Project** | `{project}/CLAUDE.md` | Project-specific principles + `.claude/memory/` |
-
-### Memory System
-
-**Progressive loading:** L0 = index (always), L1 = first 25 lines (when relevant), L2 = full file (when needed).
-
-| Type | Location | Mutability | Purpose |
-|------|----------|------------|---------|
-| event | `events/` | Immutable | Decisions, milestones |
-| case | `cases/` | Immutable | Problem → solution pairs |
-| pattern | `patterns/` | Mergeable | Reusable workflows |
-| toolbox | `toolbox/` | Updatable | Cross-project tools |
-| project | `project_*.md` | Updatable | Project state |
-| reference | `reference_*.md` | Updatable | External pointers |
-
-### Memory Ownership
-
-Memory belongs to the **project**, not to pilot:
-
-- Each project stores memory in `.claude/memory/` within its own git repo
-- `install-project.sh` creates symlinks so Claude Code finds it at `~/.claude/projects/{hash}/memory/`
-- Use `--home` flag to designate one project's memory as global (used when Claude runs from `~/`)
-- Different machines have different path hashes — the install script handles this automatically
-
-## Getting Started
+## Quick Start
 
 ```bash
-# 1. Clone pilot
-git clone https://github.com/YOUR_USER/pilot.git
+# Clone
+git clone https://github.com/your-org/pilot.git ~/.dotfiles
 
-# 2. Install methodology globally (one-time per machine)
-./install-global.sh              # auto-detects machine name
-./install-global.sh my-macbook   # or specify explicitly
+# Customize
+# 1. Edit identity/profile.yaml with your info
+# 2. Edit .claude/CLAUDE.md PROFILE section
+# 3. Add your machines to infra/machines.yaml
+# 4. Add your repos to infra/repos.yaml
 
-# 3. Install project harness (per-project)
-./install-project.sh /path/to/project
-./install-project.sh /path/to/project --hooks=lint,gate
+# Bootstrap
+~/.dotfiles/setup.sh
 
-# 4. Designate one project as global memory carrier
-./install-project.sh /path/to/dotfiles --home
+# Source shell config
+source ~/.bashrc  # or ~/.zshrc
 ```
 
-### Multi-machine Setup
+## CLI Tools
+
+### `dot` — Infrastructure meta-command
 
 ```bash
-# On machine A (macOS):
-./install-global.sh macbook
-./install-project.sh /Users/me/code/dotfiles --home
-./install-project.sh /Users/me/code/myapp
-
-# On machine B (Linux server):
-./install-global.sh dev-server
-./install-project.sh /home/me/dotfiles --home
-./install-project.sh /home/me/myapp
-
-# On machine C (Windows WSL):
-./install-global.sh windows-pc
-./install-project.sh /home/me/dotfiles --home
+dot status    # Full infrastructure status
+dot sync      # git pull + decrypt secrets + regen SSH config
+dot push      # Commit local changes + push
+dot pull      # Pull + re-run setup.sh
+dot backup    # Run cloud backup
+dot check     # Reconcile desired vs actual state
 ```
 
-Memory syncs across machines via `git push/pull` in each project repo. The install scripts create local symlinks — run them once per machine.
+### `claw` — Workspace agent launcher
 
-### Customization
+```bash
+claw myproject    # Open claude session in repo (trust level from repos.yaml)
+claw home         # Open claude -dsp in ~ (infra focus)
+claw serve name   # Start remote-control pm2 server
+claw status       # All repos: branch, dirty state, last commit
+claw setup        # Clone missing repos + bootstrap
+claw sync         # Reconcile repos.yaml with GitHub
+```
 
-1. Edit `global/CLAUDE.md` — fill in the `{{PLACEHOLDERS}}` in the PROFILE section
-2. Edit `global/methodology.md` — adjust session lifecycle and memory rules
-3. Add commands to `global/commands/` — any `.md` file becomes a `/slash-command`
+### `secrets` — Age-encrypted secrets
 
-## Slash Commands
+```bash
+secrets show              # Decrypt + print
+secrets edit              # Edit + re-encrypt
+secrets env [DIR]         # Decrypt .env + extract keys
+secrets push HOST         # SCP encrypted bundle to remote
+secrets setup-remote HOST # Full remote bootstrap
+```
 
-| Command | Purpose |
-|---------|---------|
-| `/wrap` | Session closure: extract memories, audit decisions, generate summary |
-| `/newclaw` | Launch a new Claude Code instance in a screen session |
+## Key Design Decisions
 
-## Lineage
+- **Declarative YAML** over imperative scripts — machines.yaml, repos.yaml as source of truth
+- **Age encryption** for secrets at rest — no plaintext credentials in git
+- **Symlink everything** from dotfiles repo — changes propagate via git push/pull
+- **Agent autonomy** with trust levels — repos.yaml defines per-repo trust for Claude Code
+- **Quality gates via gstack** — /review and /qa skills, not custom scripts
+- **Memory as living docs** — small set, update over create, delete when stale
+- **Decision trail in code** — rationale belongs next to the code it describes, not in separate files
 
-Draws from:
-- **ADR** (Architecture Decision Records) → `events/`
-- **C4 Model** → L0/L1/L2 progressive detail
-- **Evolutionary Architecture** → progressive maturity
+## Methodology
+
+The agent follows a structured workflow:
+
+```
+ideate → plan → implement → review → ship → qa → ops → done
+```
+
+Parallel work tracked as **tracks** with stage gates. Memory protocol keeps cross-session context minimal and fresh. See `.claude/methodology.md` for details.
+
+## Dependencies
+
+**Required:** git, python3, python3-yaml, age
+**Optional:** Tailscale, pm2, gh (GitHub CLI)

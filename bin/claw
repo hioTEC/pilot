@@ -1,0 +1,254 @@
+#!/bin/bash
+# claw — workspace agent launcher
+# Usage: claw <repo>        Open claude session in repo
+#        claw status        All repos status
+#        claw list          List repos
+#        claw setup         Clone missing repos + run bootstrap
+#
+# Why claw + repos.yaml instead of monorepo:
+#   nested git has footguns (git add -A catches parent repo),
+#   semantic confusion (infra config repo containing production apps),
+#   and .gitignore complexity. Declarative repos.yaml + thin CLI is
+#   consistent with machines.yaml/services.yaml approach.
+#
+# Note: claude -p is "print mode", not project dir. Must cd first.
+set -euo pipefail
+
+DOTFILES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPOS_YAML="${DOTFILES_DIR}/infra/repos.yaml"
+
+# --- YAML parser (pure bash, no deps beyond python3) ---
+# Returns: name|path|remote|trust|bootstrap for each repo
+parse_repos() {
+    python3 -c "
+import yaml, os
+with open('${REPOS_YAML}') as f:
+    data = yaml.safe_load(f)
+for r in data.get('repos', []):
+    if 'path' not in r: continue
+    path = os.path.expanduser(r['path'])
+    print('|'.join([
+        r['name'],
+        path,
+        r.get('remote', ''),
+        r.get('trust', 'read-only'),
+        r.get('bootstrap', ''),
+        r.get('role', ''),
+    ]))
+"
+}
+
+# --- Commands ---
+
+cmd_open() {
+    local target="$1"
+    local found=0
+
+    while IFS='|' read -r name path remote trust bootstrap role; do
+        if [[ "$name" == "$target" ]]; then
+            found=1
+            if [[ ! -d "$path" ]]; then
+                echo "Repo not cloned: $name"
+                echo "Run: claw setup"
+                exit 1
+            fi
+            echo "Opening $name ($role) ..."
+            cd "$path"
+            if [[ "$trust" == "full" ]]; then
+                exec claude --dangerously-skip-permissions
+            else
+                exec claude
+            fi
+        fi
+    done < <(parse_repos)
+
+    if [[ "$found" -eq 0 ]]; then
+        echo "Unknown repo: $target" >&2
+        echo "Available:" >&2
+        cmd_list >&2
+        exit 1
+    fi
+}
+
+cmd_status() {
+    printf "%-22s %-10s %-12s %-8s %s\n" "REPO" "ROLE" "BRANCH" "STATUS" "LAST COMMIT"
+    printf "%-22s %-10s %-12s %-8s %s\n" "----" "----" "------" "------" "-----------"
+
+    while IFS='|' read -r name path remote trust bootstrap role; do
+        if [[ ! -d "$path/.git" ]]; then
+            printf "%-22s %-10s %-12s %-8s %s\n" "$name" "$role" "-" "missing" "-"
+            continue
+        fi
+
+        local branch dirty last
+        branch=$(git -C "$path" branch --show-current 2>/dev/null || echo "?")
+        dirty=$(git -C "$path" status --porcelain 2>/dev/null | head -1)
+        last=$(git -C "$path" log -1 --format='%ar' 2>/dev/null || echo "?")
+
+        local status="clean"
+        [[ -n "$dirty" ]] && status="dirty"
+
+        printf "%-22s %-10s %-12s %-8s %s\n" "$name" "$role" "$branch" "$status" "$last"
+    done < <(parse_repos)
+}
+
+cmd_list() {
+    while IFS='|' read -r name path remote trust bootstrap role; do
+        local mark="  "
+        [[ "$trust" == "full" ]] && mark="* "
+        printf "%s%-22s %s\n" "$mark" "$name" "$role"
+    done < <(parse_repos)
+    echo ""
+    echo "* = full trust (--dangerously-skip-permissions)"
+}
+
+cmd_setup() {
+    while IFS='|' read -r name path remote trust bootstrap role; do
+        if [[ -d "$path" ]]; then
+            echo "✓ $name"
+        elif [[ -n "$remote" ]]; then
+            echo "Cloning $name → $path ..."
+            git clone "$remote" "$path"
+            if [[ -n "$bootstrap" ]]; then
+                echo "  Running bootstrap: $bootstrap"
+                (cd "$path" && bash "$bootstrap")
+            fi
+        else
+            echo "⚠ $name: no remote, skipping"
+        fi
+    done < <(parse_repos)
+}
+
+cmd_home() {
+    echo "Opening home session (infra focus) ..."
+    cd "$HOME"
+    exec claude --dangerously-skip-permissions
+}
+
+cmd_serve() {
+    local target="${1:-}"
+    local work_dir="$HOME"
+    local name
+
+    # If target is a known repo, use its directory
+    if [[ -n "$target" ]]; then
+        local found=0
+        while IFS='|' read -r rname rpath rremote rtrust rbootstrap rrole; do
+            if [[ "$rname" == "$target" ]]; then
+                found=1
+                work_dir="$rpath"
+                break
+            fi
+        done < <(parse_repos)
+        if [[ "$found" -eq 0 ]]; then
+            work_dir="$HOME"
+        fi
+        name="${target}"
+    else
+        name="$(hostname)"
+    fi
+
+    local pm2_name="rc-${name}"
+
+    # Check if already running
+    if pm2 describe "$pm2_name" &>/dev/null; then
+        echo "$pm2_name already running. Use: pm2 restart $pm2_name"
+        return 0
+    fi
+
+    if [[ ! -d "$work_dir" ]]; then
+        echo "Directory not found: $work_dir" >&2
+        exit 1
+    fi
+
+    echo "Starting remote-control: $name (pm2: $pm2_name, cwd: $work_dir) ..."
+    pm2 start "$(which claude)" \
+        --name "$pm2_name" \
+        --cwd "$work_dir" \
+        -- remote-control --name "$name" --permission-mode bypassPermissions
+    pm2 save
+}
+
+cmd_sync() {
+    # Reconcile repos.yaml with GitHub organizations
+    # Customize ORG names for your setup
+    local orgs=("your-org")
+    local dry_run=0
+    [[ "${1:-}" == "--dry-run" || "${1:-}" == "-n" ]] && dry_run=1
+
+    local yaml_keys
+    yaml_keys=$(python3 -c "
+import yaml
+with open('${REPOS_YAML}') as f:
+    data = yaml.safe_load(f)
+for r in data.get('repos', []):
+    remote = r.get('remote', '')
+    if remote:
+        name = remote.rstrip('/').removesuffix('.git').split('/')[-1].lower()
+        owner = remote.rstrip('/').removesuffix('.git').split('/')[-2].lower()
+        print(f'{owner}/{name}')
+")
+
+    local has_diff=0
+
+    for org in "${orgs[@]}"; do
+        local gh_repos
+        gh_repos=$(gh repo list "$org" --limit 100 --json name,isArchived,description \
+            --jq '.[] | "\(.name)\t\(.isArchived)\t\(.description)"' 2>/dev/null) || continue
+
+        while IFS=$'\t' read -r repo_name archived desc; do
+            local key
+            key="$(echo "${org}/${repo_name}" | tr '[:upper:]' '[:lower:]')"
+
+            if ! echo "$yaml_keys" | grep -qx "$key"; then
+                has_diff=1
+                if [[ "$archived" == "true" ]]; then
+                    echo "  NEW (archived): $org/$repo_name — $desc"
+                else
+                    echo "  NEW: $org/$repo_name — $desc"
+                fi
+            fi
+        done <<< "$gh_repos"
+    done
+
+    if [[ "$has_diff" -eq 0 ]]; then
+        echo "✓ repos.yaml is in sync with GitHub"
+    fi
+}
+
+cmd_help() {
+    cat <<'HELP'
+Usage: claw <command|repo>
+
+Commands:
+  <repo>      Open claude session in repo (full trust → --dangerously-skip-permissions)
+  home        Open claude -dsp in ~ (infra focus)
+  serve [name] Start remote-control server in ~ (default name: hostname)
+  status      Show all repos: branch, dirty state, last commit
+  list        List repos with trust level
+  setup       Clone missing repos + run bootstrap
+  sync [-n]   Reconcile repos.yaml with GitHub (-n = dry run)
+  help        This help
+
+Examples:
+  claw myproject        Open agent session in myproject
+  claw home             Infra improvement session in home dir
+  claw serve myserver   Start remote-control server named "myserver"
+  claw status           Quick overview of all repos
+  claw setup            Bootstrap workspace from scratch
+  claw sync             Check GitHub for new/archived/missing repos
+  claw sync -n          Dry run — show diff without changing yaml
+HELP
+}
+
+# --- Main ---
+case "${1:-home}" in
+    home)    cmd_home ;;
+    serve)   cmd_serve "${2:-}" ;;
+    status)  cmd_status ;;
+    list)    cmd_list ;;
+    setup)   cmd_setup ;;
+    sync)    cmd_sync "${2:-}" ;;
+    help|--help|-h) cmd_help ;;
+    *)       cmd_open "$1" ;;
+esac

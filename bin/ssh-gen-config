@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Generate ~/.ssh/config from infra/machines.yaml.
+
+Naming convention:
+  ssh <host>      — direct (public IP, default port)
+  ssh <host>-jp   — via jump proxy (not generated for jump host itself)
+  ssh <host>-ts   — via Tailscale mesh (always port 22, no jump)
+
+Aliases (e.g. friendly names) get direct entries only.
+
+This is a template — customize paths and jump host names for your setup.
+"""
+
+import os
+import sys
+import yaml
+
+DOTFILES = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MACHINES = os.path.join(DOTFILES, "infra", "machines.yaml")
+SSH_CONFIG = os.path.expanduser("~/.ssh/config.d/dotfiles")
+KEYS_DIR = os.path.join(DOTFILES, "keys")
+
+MARKER_BEGIN = "# --- BEGIN dotfiles ---"
+MARKER_END = "# --- END dotfiles ---"
+
+
+def main():
+    with open(MACHINES) as f:
+        data = yaml.safe_load(f)
+
+    entries = []
+    # Customize: set your jump host name
+    jump_host = None
+
+    for server in data.get("servers", []):
+        name = server["name"]
+        ip = server.get("ip", "")
+        user = server.get("user", "root")
+        port = server.get("ssh_port", 22)
+        key = server.get("ssh_key", "")
+        ts_ip = server.get("tailscale_ip", "")
+        proxy = server.get("proxy_jump", "")
+        aliases = server.get("alias", [])
+
+        key_path = os.path.join(KEYS_DIR, key) if key else ""
+
+        # Direct entry
+        entry = f"Host {name}\n  HostName {ip}\n  User {user}\n  Port {port}\n"
+        if key_path:
+            entry += f"  IdentityFile {key_path}\n"
+        entries.append(entry)
+
+        # Jump proxy entry (skip for jump host itself)
+        if proxy and name != jump_host:
+            entry = f"Host {name}-jp\n  HostName {ip}\n  User {user}\n  Port {port}\n  ProxyJump {proxy}\n"
+            if key_path:
+                entry += f"  IdentityFile {key_path}\n"
+            entries.append(entry)
+
+        # Tailscale entry
+        if ts_ip:
+            entry = f"Host {name}-ts\n  HostName {ts_ip}\n  User {user}\n  Port 22\n"
+            if key_path:
+                entry += f"  IdentityFile {key_path}\n"
+            entries.append(entry)
+
+        # Alias entries (direct only)
+        for alias in aliases:
+            alias_lower = alias.lower()
+            entry = f"Host {alias_lower}\n  HostName {ip}\n  User {user}\n  Port {port}\n"
+            if key_path:
+                entry += f"  IdentityFile {key_path}\n"
+            entries.append(entry)
+
+    config = f"{MARKER_BEGIN}\n" + "\n".join(entries) + f"\n{MARKER_END}\n"
+
+    os.makedirs(os.path.dirname(SSH_CONFIG), exist_ok=True)
+    with open(SSH_CONFIG, "w") as f:
+        f.write(config)
+
+    print(f"  Generated {len(entries)} entries → {SSH_CONFIG}")
+
+
+if __name__ == "__main__":
+    main()

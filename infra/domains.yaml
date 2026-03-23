@@ -1,0 +1,16 @@
+version: "1.0"
+
+# Domain DNS configuration
+# Used by ops/dns.py for record management
+
+domains: []
+  # - name: example.com
+  #   registrar: cloudflare
+  #   zone_id: "your-zone-id"
+  #   records:
+  #     - type: A
+  #       name: "@"
+  #       value: "1.2.3.4"
+  #     - type: CNAME
+  #       name: "www"
+  #       value: "example.com"

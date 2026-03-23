@@ -1,0 +1,12 @@
+version: "1.0"
+
+# Running services per machine
+# Used by ops/status.py for monitoring
+
+services: []
+  # - name: my-app
+  #   machine: my-server
+  #   port: 3000
+  #   domain: app.example.com
+  #   process: pm2
+  #   health: http://localhost:3000/health

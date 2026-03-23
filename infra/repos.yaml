@@ -1,0 +1,31 @@
+version: "1.1"
+
+# Workspace repos — used by `claw` to manage agent sessions
+# trust: full = --dangerously-skip-permissions, read-only = normal claude
+# status: active | trial | archived (tools/plugins only)
+
+repos:
+  # --- infra ---
+  - name: dotfiles
+    path: ~/.dotfiles
+    remote: https://github.com/your-org/dotfiles.git
+    role: infra
+    trust: full
+    bootstrap: ./setup.sh
+
+  # --- products ---
+  # - name: my-app
+  #   path: ~/repos/my-app
+  #   remote: https://github.com/your-org/my-app.git
+  #   role: product
+  #   trust: full
+  #   deploy: my-server
+
+  # --- tools & plugins (managed by Claude Code, not by claw) ---
+  # gstack: ~/.claude/skills/gstack/ (git clone + ./setup, upgrade via /gstack-upgrade)
+  # claude-hud: ~/.claude/plugins/ (claude /plugin marketplace)
+
+  # --- archive (GH archived, no local clone) ---
+  # - name: old-project
+  #   remote: https://github.com/your-org/old-project.git
+  #   role: archive

@@ -1,7 +1,14 @@
-node_modules/
+# Secrets — never commit
 .env
-*.log
-data/
-.playwright-mcp/
-.claude/
-workbuddy-guide-*.png
+.secrets.age
+.secrets.pub
+keys/*.pem
+
+# OS
+.DS_Store
+
+# Claude Code memory (managed per-machine via symlink, not committed here)
+.claude/memory/
+
+# gstack state
+.gstack/

@@ -1,0 +1,27 @@
+version: "1.0"
+
+# Desired infrastructure state — compared against actual by `dot check`
+# Safety classification: safe (auto-fix), confirm (ask first), manual (report only)
+
+# backup:
+#   provider: s3  # or cos, r2, etc.
+#   bucket: my-backups
+#   targets:
+#     - path: /data/app
+#       schedule: daily
+#       retention: 7
+
+# firewall:
+#   default: deny
+#   rules:
+#     - port: 22
+#       source: tailscale
+#       safety: safe
+#     - port: 443
+#       source: any
+#       safety: safe
+
+# ssh_hardening:
+#   password_auth: false
+#   root_login: prohibit-password
+#   safety: confirm
